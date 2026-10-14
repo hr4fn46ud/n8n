@@ -1,0 +1,896 @@
+{
+  "name": "Fediverse (Mastodon API) → ATProto Crossposter (Template)",
+  "nodes": [
+    {
+      "id": "8cb653d5-4059-44b0-a938-62d569bffbf1",
+      "name": "Every 5 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1320,
+        220
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "8cf758cc-6d6d-4035-9fc0-ea5e2f01e338",
+      "name": "Configuration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1100,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const state = $getWorkflowStaticData('global');\nstate.processed ??= {};\nstate.initialized ??= false;\n\nconst fediBaseUrl = 'https://YOUR_FEDI_HOST';\nconst fediAccount = 'YOUR_USERNAME@YOUR_FEDI_HOST';\nconst atprotoHandle = 'YOUR_ATPROTO_HANDLE';\n\nif ([fediBaseUrl, fediAccount, atprotoHandle].some(value => value.includes('YOUR_'))) {\n  throw new Error('Replace all YOUR_* placeholders in the Configuration node before activating the workflow.');\n}\n\nreturn [{\n  json: {\n    fediBaseUrl: fediBaseUrl.replace(/\\/$/, ''),\n    fediAccount,\n    fediUsername: fediAccount.split('@')[0],\n    atprotoHandle,\n    bootstrapMode: 'skip_existing',\n    fetchLimit: 40,\n    maxProcessedIds: 2000,\n    language: 'de',\n  },\n}];"
+      }
+    },
+    {
+      "id": "2263d1b3-3695-41d3-8706-e5a68d70f5bb",
+      "name": "Look up Fediverse account",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -860,
+        220
+      ],
+      "parameters": {
+        "url": "={{ $json.fediBaseUrl + '/api/v1/accounts/lookup' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "acct",
+              "value": "={{ $json.fediAccount }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "SELECT_FEDIVERSE_BEARER_CREDENTIAL",
+          "name": "Fediverse read token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "30d61105-3144-497b-891f-10167cb32056",
+      "name": "Fetch recent Fediverse posts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -620,
+        220
+      ],
+      "parameters": {
+        "url": "={{ $('Configuration').first().json.fediBaseUrl + '/api/v1/accounts/' + encodeURIComponent($json.id) + '/statuses' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "exclude_replies",
+              "value": "true"
+            },
+            {
+              "name": "exclude_reblogs",
+              "value": "true"
+            },
+            {
+              "name": "limit",
+              "value": "={{ $('Configuration').first().json.fetchLimit }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "SELECT_FEDIVERSE_BEARER_CREDENTIAL",
+          "name": "Fediverse read token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "78ad7c94-5d90-4cc3-ab82-b85213dc8a4d",
+      "name": "Select new public originals",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -380,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const cfg = $('Configuration').first().json;\nconst state = $getWorkflowStaticData('global');\nstate.processed ??= {};\n\nconst flatten = (value) => {\n  if (Array.isArray(value)) return value;\n  if (Array.isArray(value?.body)) return value.body;\n  return [value];\n};\n\nconst decodeEntities = (s) => String(s ?? '')\n  .replace(/&#(x[0-9a-f]+|\\d+);/gi, (_, n) => {\n    const cp = n[0].toLowerCase() === 'x' ? parseInt(n.slice(1), 16) : parseInt(n, 10);\n    try { return String.fromCodePoint(cp); } catch { return ''; }\n  })\n  .replace(/&(amp|lt|gt|quot|apos|nbsp);/gi, (_, n) => ({\n    amp: '&', lt: '<', gt: '>', quot: '\"', apos: \"'\", nbsp: ' ',\n  })[n.toLowerCase()]);\n\nconst stripTags = (s) => decodeEntities(String(s ?? '').replace(/<[^>]*>/g, ''));\n\nconst htmlToText = (html) => {\n  let s = String(html ?? '');\n  s = s.replace(/<a\\b[^>]*href=(['\"])(.*?)\\1[^>]*>([\\s\\S]*?)<\\/a>/gi, (_, _q, href, inner) => {\n    const label = stripTags(inner).trim();\n    const decodedHref = decodeEntities(href);\n    if (label.startsWith('@') || label.startsWith('#')) return label;\n    return /^https?:\\/\\//i.test(decodedHref) ? decodedHref : label;\n  });\n  s = s.replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<\\/p\\s*>/gi, '\\n\\n')\n    .replace(/<li\\b[^>]*>/gi, '• ')\n    .replace(/<\\/li\\s*>/gi, '\\n')\n    .replace(/<[^>]*>/g, '');\n  return decodeEntities(s)\n    .replace(/\\r/g, '')\n    .replace(/[ \\t]+\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .trim();\n};\n\nconst segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });\nconst graphemes = (s) => Array.from(segmenter.segment(s), x => x.segment);\n\nconst splitText = (text) => {\n  const all = graphemes(text);\n  if (all.length <= 300) return [text];\n  const limit = 292;\n  const out = [];\n  let rest = text.trim();\n  while (graphemes(rest).length > limit) {\n    const gs = graphemes(rest);\n    const head = gs.slice(0, limit).join('');\n    let cut = Math.max(head.lastIndexOf('\\n\\n'), head.lastIndexOf('\\n'), head.lastIndexOf('. '), head.lastIndexOf(' '));\n    if (cut < Math.floor(limit * 0.55)) cut = head.length;\n    const piece = rest.slice(0, cut).trim();\n    out.push(piece || head);\n    rest = rest.slice(cut).trim();\n  }\n  if (rest) out.push(rest);\n  return out.map((part, i) => part + '\\n\\n(' + (i + 1) + '/' + out.length + ')');\n};\n\nconst rows = $input.all().flatMap(item => flatten(item.json));\nconst eligible = rows.filter(status => {\n  if (!status?.id || status.visibility !== 'public') return false;\n  if (status.reblog || status.in_reply_to_id) return false;\n  const account = status.account ?? {};\n  const acct = String(account.acct ?? '').replace(/^@/, '').toLowerCase();\n  const username = String(account.username ?? '').toLowerCase();\n  return username === cfg.fediUsername.toLowerCase() &&\n    (acct === cfg.fediUsername.toLowerCase() || acct === cfg.fediAccount.toLowerCase());\n}).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));\n\nif (!state.initialized && cfg.bootstrapMode === 'skip_existing') {\n  for (const status of eligible) state.processed[String(status.id)] = new Date().toISOString();\n  state.initialized = true;\n  return [];\n}\n\nstate.initialized = true;\nconst unseen = eligible.filter(status => !state.processed[String(status.id)]);\n\nreturn unseen.map(status => {\n  const content = htmlToText(status.content || status.text || '');\n  const cw = htmlToText(status.spoiler_text || '');\n  const text = cw ? '[CW: ' + cw + ']\\n\\n' + content : content;\n  const images = (status.media_attachments ?? [])\n    .filter(m => m?.type === 'image' && (m.url || m.remote_url))\n    .slice(0, 4)\n    .map((m, index) => ({\n      index,\n      url: m.url || m.remote_url,\n      alt: String(m.description || '').trim(),\n      mimeType: m.mime_type || '',\n    }));\n  const chunks = text ? splitText(text) : (images.length ? [''] : []);\n  if (!chunks.length) throw new Error('Fediverse status ' + status.id + ' has neither publishable text nor images.');\n  return {\n    json: {\n      sourceId: String(status.id),\n      sourceUrl: status.url,\n      sourceCreatedAt: status.created_at,\n      chunks,\n      images,\n      droppedImageCount: Math.max(0, (status.media_attachments ?? []).filter(m => m?.type === 'image').length - 4),\n      language: cfg.language,\n    },\n  };\n});"
+      }
+    },
+    {
+      "id": "4e20327c-17cf-4f2e-a989-eeb06339c536",
+      "name": "Resolve ATProto handle",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -140,
+        220
+      ],
+      "parameters": {
+        "url": "https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "handle",
+              "value": "={{ $('Configuration').first().json.atprotoHandle }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "eb5fda6d-797f-49b5-af70-751395e450de",
+      "name": "Build DID document URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        100,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const did = String($json.did || '');\nlet didDocumentUrl;\n\nif (did.startsWith('did:plc:')) {\n  didDocumentUrl = 'https://plc.directory/' + encodeURIComponent(did);\n} else if (did.startsWith('did:web:')) {\n  const parts = did.slice(8).split(':').map(decodeURIComponent);\n  const host = parts.shift();\n  if (!host || /[\\\\/@]/.test(host)) throw new Error('Unsafe did:web host: ' + host);\n  didDocumentUrl = parts.length\n    ? 'https://' + host + '/' + parts.map(encodeURIComponent).join('/') + '/did.json'\n    : 'https://' + host + '/.well-known/did.json';\n} else {\n  throw new Error('Unsupported DID method: ' + did);\n}\n\nreturn [{ json: { did, didDocumentUrl } }];"
+      }
+    },
+    {
+      "id": "fc11f581-df40-45aa-9dac-625a564442d1",
+      "name": "Fetch DID document",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        340,
+        220
+      ],
+      "parameters": {
+        "url": "={{ $json.didDocumentUrl }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "2ab107e2-24c8-4400-8ee6-809fe8e1cc87",
+      "name": "Extract PDS endpoint",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        580,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const did = $('Build DID document URL').first().json.did;\nconst doc = $json;\nif (doc.id && doc.id !== did) throw new Error('DID document id does not match resolved DID.');\nconst services = Array.isArray(doc.service) ? doc.service : [];\nconst service = services.find(s => {\n  const types = Array.isArray(s.type) ? s.type : [s.type];\n  return types.includes('AtprotoPersonalDataServer') || String(s.id || '').endsWith('#atproto_pds');\n});\nif (!service?.serviceEndpoint) throw new Error('No ATProto PDS service found in DID document.');\nconst endpointText = String(service.serviceEndpoint).trim();\nif (!/^https:\\/\\//i.test(endpointText)) throw new Error('Refusing non-HTTPS PDS endpoint.');\nconst authority = endpointText.slice(8).split(/[/?#]/, 1)[0];\nif (!authority || authority.includes('@') || /[\\\\\\s]/.test(authority)) {\n  throw new Error('Refusing invalid PDS endpoint.');\n}\nreturn [{ json: { did, pds: 'https://' + authority } }];"
+      }
+    },
+    {
+      "id": "2e579b89-0c50-4896-9707-ccdf5f7f30d6",
+      "name": "Create ATProto session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.pds + '/xrpc/com.atproto.server.createSession' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpCustomAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={}",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpCustomAuth": {
+          "id": "SELECT_ATPROTO_CUSTOM_AUTH_CREDENTIAL",
+          "name": "ATProto login body"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "5af904f2-d7df-44f9-a619-286ae49dc29a",
+      "name": "Attach session to pending posts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const session = $json;\nconst resolved = $('Extract PDS endpoint').first().json;\nconst configuredHandle = $('Configuration').first().json.atprotoHandle;\nif (!session.accessJwt) throw new Error('ATProto createSession returned no accessJwt.');\nif (session.did !== resolved.did) {\n  throw new Error('ATProto login DID does not match the resolved DID for ' + configuredHandle + '.');\n}\nreturn $('Select new public originals').all().map(item => ({\n  json: {\n    ...item.json,\n    did: resolved.did,\n    pds: resolved.pds,\n    accessJwt: session.accessJwt,\n  },\n}));"
+      }
+    },
+    {
+      "id": "51c13f61-184f-40e7-ad43-9789d1fc4dcc",
+      "name": "Loop source posts",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1300,
+        220
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": false
+        }
+      }
+    },
+    {
+      "id": "158efbd2-71af-48c0-9c68-3857627c461c",
+      "name": "Prepare image items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        360
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const base = $json;\nif (!base.images?.length) return [{ json: { ...base, hasMedia: false, media: null } }];\nreturn base.images.map(media => ({\n  json: { ...base, hasMedia: true, media },\n}));"
+      }
+    },
+    {
+      "id": "4511f365-15e4-49cf-a0fb-af014a8bf97c",
+      "name": "Has image",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1780,
+        360
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "793798e8-13c0-4348-b069-7afea37cfbcb",
+              "leftValue": "={{ $json.hasMedia }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "9fa1eb50-bd28-421c-a21a-54892f8d158d",
+      "name": "Download image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2020,
+        300
+      ],
+      "parameters": {
+        "url": "={{ $json.media.url }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "4f8e39db-1250-4ac4-b7a0-02d1f47113a3",
+      "name": "Upload image blob",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2260,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Prepare image items').item.json.pds + '/xrpc/com.atproto.repo.uploadBlob' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Prepare image items').item.json.accessJwt }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "={{ $binary.data.mimeType || $('Prepare image items').item.json.media.mimeType || 'application/octet-stream' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "888c91e4-9c04-44bb-a712-1da3fb0ade06",
+      "name": "Capture uploaded blob",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const meta = $('Prepare image items').item.json;\nif (!$json.blob) throw new Error('uploadBlob returned no blob for source status ' + meta.sourceId);\nreturn {\n  json: {\n    ...meta,\n    uploaded: { alt: meta.media.alt || '', image: $json.blob },\n  },\n};"
+      }
+    },
+    {
+      "id": "840422cb-7070-4dd1-8b84-f0c98559a20c",
+      "name": "No image payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        500
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "return { json: { ...$json, uploaded: null } };"
+      }
+    },
+    {
+      "id": "f2ce1322-2cd1-4385-8392-bd30ec144702",
+      "name": "Build thread items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2740,
+        400
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const inputs = $input.all().map(i => i.json);\nif (!inputs.length) return [];\nconst base = inputs[0];\nconst uploads = inputs\n  .filter(x => x.uploaded)\n  .sort((a, b) => a.media.index - b.media.index)\n  .map(x => x.uploaded)\n  .slice(0, 4);\n\nconst alphabet = '234567abcdefghijklmnopqrstuvwxyz';\nconst hash10 = (s) => {\n  let h = 2166136261;\n  for (const ch of String(s)) h = Math.imul(h ^ ch.codePointAt(0), 16777619);\n  return (h >>> 0) & 1023;\n};\nconst micros = (iso) => {\n  const match = String(iso).match(/^(.*?\\.)(\\d+)(Z|[+-]\\d\\d:\\d\\d)$/);\n  if (!match) return BigInt(Date.parse(iso)) * 1000n;\n  const msBase = Date.parse(match[1] + match[2].slice(0, 3).padEnd(3, '0') + match[3]);\n  return BigInt(msBase) * 1000n + BigInt(match[2].slice(3, 6).padEnd(3, '0'));\n};\nconst tid = (iso, sourceId, index) => {\n  let value = ((micros(iso) + BigInt(index)) << 10n) | BigInt(hash10(sourceId));\n  let out = '';\n  for (let i = 0; i < 13; i++) { out = alphabet[Number(value & 31n)] + out; value >>= 5n; }\n  if (!/^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/.test(out)) throw new Error('Generated invalid TID: ' + out);\n  return out;\n};\n\nconst state = $getWorkflowStaticData('global');\nstate.threadState ??= {};\nstate.threadState[base.sourceId] = { root: null, parent: null };\n\nreturn base.chunks.map((text, index) => ({\n  json: {\n    sourceId: base.sourceId,\n    sourceUrl: base.sourceUrl,\n    sourceCreatedAt: base.sourceCreatedAt,\n    language: base.language,\n    did: base.did,\n    pds: base.pds,\n    accessJwt: base.accessJwt,\n    text,\n    index,\n    total: base.chunks.length,\n    rkey: tid(base.sourceCreatedAt, base.sourceId, index),\n    uploadedImages: index === 0 ? uploads : [],\n    droppedImageCount: base.droppedImageCount,\n  },\n}));"
+      }
+    },
+    {
+      "id": "c00e5959-263a-4df7-a1e8-114a82ac6e65",
+      "name": "Loop thread parts",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2980,
+        400
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": "={{ $prevNode.name === 'Build thread items' }}"
+        }
+      }
+    },
+    {
+      "id": "a625dafe-e22b-4e60-8611-25f7ce0201f3",
+      "name": "Build ATProto post record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3220,
+        540
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item = $json;\nconst staticData = $getWorkflowStaticData('global');\nstaticData.threadState ??= {};\nconst thread = staticData.threadState[item.sourceId] ?? { root: null, parent: null };\n\nconst byteLength = (s) => Buffer.from(s, 'utf8').length;\nconst ranges = [];\nconst addFacet = (start, end, feature) => {\n  if (ranges.some(r => start < r.end && end > r.start)) return;\n  ranges.push({ start, end });\n  facets.push({\n    index: { byteStart: byteLength(item.text.slice(0, start)), byteEnd: byteLength(item.text.slice(0, end)) },\n    features: [feature],\n  });\n};\n\nconst facets = [];\nconst urlRe = /https?:\\/\\/[^\\s<>\"']+/gu;\nfor (const match of item.text.matchAll(urlRe)) {\n  let value = match[0].replace(/[),.;:!?]+$/u, '');\n  if (!value) continue;\n  addFacet(match.index, match.index + value.length, { '$type': 'app.bsky.richtext.facet#link', uri: value });\n}\nconst tagRe = /#[\\p{L}\\p{N}_]+/gu;\nfor (const match of item.text.matchAll(tagRe)) {\n  const tag = match[0].slice(1);\n  if (Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(tag)).length > 64) continue;\n  addFacet(match.index, match.index + match[0].length, { '$type': 'app.bsky.richtext.facet#tag', tag });\n}\nfacets.sort((a, b) => a.index.byteStart - b.index.byteStart);\n\nconst record = {\n  '$type': 'app.bsky.feed.post',\n  text: item.text,\n  createdAt: new Date(Date.parse(item.sourceCreatedAt) + item.index).toISOString(),\n};\nif (facets.length) record.facets = facets;\nif (item.language) record.langs = [item.language];\nif (item.uploadedImages?.length) {\n  record.embed = { '$type': 'app.bsky.embed.images', images: item.uploadedImages };\n}\nif (item.index > 0) {\n  if (!thread.root || !thread.parent) throw new Error('Missing root/parent for thread part ' + (item.index + 1));\n  record.reply = { root: thread.root, parent: thread.parent };\n}\n\nreturn {\n  json: {\n    ...item,\n    request: {\n      repo: item.did,\n      collection: 'app.bsky.feed.post',\n      rkey: item.rkey,\n      validate: true,\n      record,\n    },\n  },\n};"
+      }
+    },
+    {
+      "id": "4b7f39bf-40a9-476c-b754-4c7efab80907",
+      "name": "Put ATProto post record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3460,
+        540
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.pds + '/xrpc/com.atproto.repo.putRecord' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.accessJwt }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.request) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 5000
+    },
+    {
+      "id": "b03e010c-443c-4fd1-899f-3a3f89d95530",
+      "name": "Capture post strong ref",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3700,
+        540
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sent = $('Build ATProto post record').item.json;\nif (!$json.uri || !$json.cid) throw new Error('putRecord returned no strong reference.');\nconst ref = { uri: $json.uri, cid: $json.cid };\nconst state = $getWorkflowStaticData('global');\nstate.threadState ??= {};\nconst thread = state.threadState[sent.sourceId] ?? { root: null, parent: null };\nif (sent.index === 0) thread.root = ref;\nthread.parent = ref;\nstate.threadState[sent.sourceId] = thread;\nreturn { json: { ...sent, createdRef: ref } };"
+      }
+    },
+    {
+      "id": "d9494c09-a1f8-4657-bffe-e9cac7bca2e1",
+      "name": "Mark source post complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3220,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json);\nif (!rows.length) throw new Error('Thread loop completed without records.');\nconst first = rows[0];\nconst state = $getWorkflowStaticData('global');\nstate.processed ??= {};\nstate.processed[first.sourceId] = new Date().toISOString();\ndelete state.threadState?.[first.sourceId];\n\nconst entries = Object.entries(state.processed).sort((a, b) => String(b[1]).localeCompare(String(a[1])));\nconst keep = $('Configuration').first().json.maxProcessedIds;\nstate.processed = Object.fromEntries(entries.slice(0, keep));\n\nreturn [{\n  json: {\n    sourceId: first.sourceId,\n    sourceUrl: first.sourceUrl,\n    threadParts: rows.length,\n    rootUri: rows[0].createdRef.uri,\n    imagesUploaded: first.uploadedImages?.length || 0,\n    imagesDroppedBecauseAtProtoLimitIsFour: first.droppedImageCount || 0,\n  },\n}];"
+      }
+    },
+    {
+      "id": "98091591-87e2-4804-aa71-a9fdcb513cb2",
+      "name": "Run summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json);\nreturn [{\n  json: {\n    ok: true,\n    processedCount: rows.length,\n    processed: rows,\n    finishedAt: new Date().toISOString(),\n  },\n}];"
+      }
+    },
+    {
+      "id": "7b7fcb44-4ca0-43af-85af-7c6d4c8adef5",
+      "name": "Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1320,
+        -180
+      ],
+      "parameters": {
+        "width": 1000,
+        "height": 300,
+        "content": "## Setup before publishing\n1. In **Configuration**, replace all `YOUR_*` placeholders.\n2. Create a **Bearer Auth** credential named `Fediverse read token`; paste a user token with `read` permission from the Mastodon-compatible source server. Assign it to both Fediverse HTTP nodes.\n3. Create a **Custom Auth** credential named `ATProto login body` with JSON: `{\"body\":{\"identifier\":\"YOUR_ATPROTO_HANDLE\",\"password\":\"YOUR_APP_PASSWORD\"}}`. Assign it to **Create ATProto session**.\n4. Save and publish/activate the workflow. Let the first scheduled production run establish the duplicate-protection baseline before publishing a new source post.\n\nNo secret is stored in this workflow JSON. The public ATProto identity and DID resolver endpoints are protocol infrastructure, not account-specific configuration."
+      }
+    },
+    {
+      "id": "f735a5d1-b4a8-4a45-8f1f-7817a240962d",
+      "name": "Behavior and limits",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        -180
+      ],
+      "parameters": {
+        "width": 1180,
+        "height": 300,
+        "content": "## Behavior\n- First production run uses `skip_existing`: it records the current recent posts but publishes none. Change `bootstrapMode` to `publish_existing` before first activation if you deliberately want the backlog.\n- Only public, own, non-reply, non-boost statuses are accepted. HTML is converted to text.\n- Text is split at grapheme boundaries and numbered; each ATProto record stays within 300 graphemes. URL and hashtag facets use UTF-8 byte offsets.\n- Up to four images are downloaded, uploaded with `com.atproto.repo.uploadBlob`, and attached to the first thread post with alt text.\n- Thread replies carry both `root` and immediate `parent`. Deterministic TIDs plus `putRecord` make retries idempotent. Network nodes retry four times with a five-second delay and fail loudly afterward."
+      }
+    }
+  ],
+  "connections": {
+    "Configuration": {
+      "main": [
+        [
+          {
+            "node": "Look up Fediverse account",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select new public originals": {
+      "main": [
+        [
+          {
+            "node": "Resolve ATProto handle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve ATProto handle": {
+      "main": [
+        [
+          {
+            "node": "Build DID document URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build DID document URL": {
+      "main": [
+        [
+          {
+            "node": "Fetch DID document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch DID document": {
+      "main": [
+        [
+          {
+            "node": "Extract PDS endpoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDS endpoint": {
+      "main": [
+        [
+          {
+            "node": "Create ATProto session",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create ATProto session": {
+      "main": [
+        [
+          {
+            "node": "Attach session to pending posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach session to pending posts": {
+      "main": [
+        [
+          {
+            "node": "Loop source posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop source posts": {
+      "main": [
+        [
+          {
+            "node": "Run summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare image items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare image items": {
+      "main": [
+        [
+          {
+            "node": "Has image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has image": {
+      "main": [
+        [
+          {
+            "node": "Download image",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No image payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download image": {
+      "main": [
+        [
+          {
+            "node": "Upload image blob",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload image blob": {
+      "main": [
+        [
+          {
+            "node": "Capture uploaded blob",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture uploaded blob": {
+      "main": [
+        [
+          {
+            "node": "Build thread items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No image payload": {
+      "main": [
+        [
+          {
+            "node": "Build thread items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build thread items": {
+      "main": [
+        [
+          {
+            "node": "Loop thread parts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop thread parts": {
+      "main": [
+        [
+          {
+            "node": "Mark source post complete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build ATProto post record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build ATProto post record": {
+      "main": [
+        [
+          {
+            "node": "Put ATProto post record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Put ATProto post record": {
+      "main": [
+        [
+          {
+            "node": "Capture post strong ref",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture post strong ref": {
+      "main": [
+        [
+          {
+            "node": "Loop thread parts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark source post complete": {
+      "main": [
+        [
+          {
+            "node": "Loop source posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Look up Fediverse account": {
+      "main": [
+        [
+          {
+            "node": "Fetch recent Fediverse posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch recent Fediverse posts": {
+      "main": [
+        [
+          {
+            "node": "Select new public originals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": true
+  },
+  "versionId": "9d25423f-28c2-4dcf-91e8-68ae8accc24d",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
