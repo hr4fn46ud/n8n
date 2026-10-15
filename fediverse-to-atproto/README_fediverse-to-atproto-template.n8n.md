@@ -99,6 +99,20 @@ Use the generated app password, not the normal account password. The app passwor
 3. Select `fediverse-to-atproto-template.n8n.json`.
 4. Keep the workflow inactive until all placeholders and credentials have been configured.
 
+### Canvas guide
+
+The workflow canvas is divided into five numbered notes so that configuration and authentication are not buried in one large instruction block:
+
+| Section | Purpose |
+|---|---|
+| `1 — Configuration` | public account values and operational defaults |
+| `2 — Fediverse credential` | Bearer Auth token and the two nodes that use it |
+| `3 — ATProto credential` | formatted Custom Auth JSON and its single assigned node |
+| `4 — Image handling` | resize, byte validation, blob upload, and aggregation |
+| `5 — Publication and first run` | thread creation, duplicate protection, and baseline behavior |
+
+The credential-bearing nodes also display short notes directly on the canvas. Nodes that use the temporary ATProto session token explicitly say that no stored credential must be assigned to them.
+
 ## 4. Fill in the Configuration node
 
 Open the `Configuration` node and replace the three placeholders:
