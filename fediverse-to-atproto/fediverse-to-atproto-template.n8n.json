@@ -32,7 +32,7 @@
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const state = $getWorkflowStaticData('global');\nstate.processed ??= {};\nstate.initialized ??= false;\n\nconst fediBaseUrl = 'https://YOUR_FEDI_HOST';\nconst fediAccount = 'YOUR_USERNAME@YOUR_FEDI_HOST';\nconst atprotoHandle = 'YOUR_ATPROTO_HANDLE';\n\nif ([fediBaseUrl, fediAccount, atprotoHandle].some(value => value.includes('YOUR_'))) {\n  throw new Error('Replace all YOUR_* placeholders in the Configuration node before activating the workflow.');\n}\n\nreturn [{\n  json: {\n    fediBaseUrl: fediBaseUrl.replace(/\\/$/, ''),\n    fediAccount,\n    fediUsername: fediAccount.split('@')[0],\n    atprotoHandle,\n    bootstrapMode: 'skip_existing',\n    fetchLimit: 40,\n    maxProcessedIds: 2000,\n    language: 'de',\n  },\n}];"
+        "jsCode": "const state = $getWorkflowStaticData('global');\nstate.processed ??= {};\nstate.initialized ??= false;\n\nconst fediBaseUrl = 'https://YOUR_FEDI_HOST';\nconst fediAccount = 'YOUR_USERNAME@YOUR_FEDI_HOST';\nconst atprotoHandle = 'YOUR_ATPROTO_HANDLE';\n\nif ([fediBaseUrl, fediAccount, atprotoHandle].some(value => value.includes('YOUR_'))) {\n  throw new Error('Replace all YOUR_* placeholders in the Configuration node before activating the workflow.');\n}\n\nreturn [{\n  json: {\n    fediBaseUrl: fediBaseUrl.replace(/\\/$/, ''),\n    fediAccount,\n    fediUsername: fediAccount.split('@')[0],\n    atprotoHandle,\n    bootstrapMode: 'skip_existing',\n    fetchLimit: 40,\n    maxProcessedIds: 2000,\n    language: 'de',\n    imageMaxBytes: 1000000,\n    imageMaxDimension: 1200,\n    imageJpegQuality: 68,\n  },\n}];"
       }
     },
     {
@@ -370,7 +370,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        2260,
+        2740,
         300
       ],
       "parameters": {
@@ -411,7 +411,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2500,
+        2980,
         300
       ],
       "parameters": {
@@ -425,8 +425,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2020,
-        500
+        2980,
+        520
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
@@ -439,8 +439,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2740,
-        400
+        3220,
+        360
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
@@ -453,8 +453,8 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        2980,
-        400
+        3460,
+        360
       ],
       "parameters": {
         "batchSize": 1,
@@ -469,8 +469,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3220,
-        540
+        3700,
+        420
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
@@ -483,8 +483,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        3460,
-        540
+        3940,
+        420
       ],
       "parameters": {
         "method": "POST",
@@ -525,8 +525,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3700,
-        540
+        4180,
+        420
       ],
       "parameters": {
         "mode": "runOnceForAllItems",
@@ -539,7 +539,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3220,
+        3700,
         220
       ],
       "parameters": {
@@ -588,7 +588,43 @@
       "parameters": {
         "width": 1180,
         "height": 300,
-        "content": "## Behavior\n- First production run uses `skip_existing`: it records the current recent posts but publishes none. Change `bootstrapMode` to `publish_existing` before first activation if you deliberately want the backlog.\n- Only public, own, non-reply, non-boost statuses are accepted. HTML is converted to text.\n- Text is split at grapheme boundaries and numbered; each ATProto record stays within 300 graphemes. URL and hashtag facets use UTF-8 byte offsets.\n- Up to four images (maximum 2,000,000 bytes each) are downloaded and uploaded individually with `com.atproto.repo.uploadBlob`, then aggregated and attached to the first thread post with alt text. `Capture uploaded blob` must run once for each item; `Build thread items` must run once for all items.\n- Thread replies carry both `root` and immediate `parent`. Deterministic TIDs plus `putRecord` make retries idempotent. Network nodes retry four times with a five-second delay and fail loudly afterward."
+        "content": "## Behavior\n- First production run uses `skip_existing`: it records the current recent posts but publishes none. Change `bootstrapMode` to `publish_existing` before first activation if you deliberately want the backlog.\n- Only public, own, non-reply, non-boost statuses are accepted. HTML is converted to text.\n- Text is split at grapheme boundaries and numbered; each ATProto record stays within 300 graphemes. URL and hashtag facets use UTF-8 byte offsets.\n- Up to four images are resized to at most 1200 × 1200 pixels, converted to JPEG at quality 68, and checked against a 1,000,000-byte limit before individual `uploadBlob` calls. Alt text is retained. Animated images and transparency are flattened by JPEG conversion.\n- `Capture uploaded blob` must run once for each item; `Build thread items` and `Validate compressed image` must run once for all items.\n- Thread replies carry both `root` and immediate `parent`. Deterministic TIDs plus `putRecord` make retries idempotent. Network nodes retry four times with a five-second delay and fail loudly afterward."
+      }
+    },
+    {
+      "id": "a896e8ca-a129-4b34-a4a1-a966cb29993a",
+      "name": "Compress image below 1 MB",
+      "type": "n8n-nodes-base.editImage",
+      "typeVersion": 1.1,
+      "position": [
+        2260,
+        300
+      ],
+      "parameters": {
+        "operation": "resize",
+        "dataPropertyName": "data",
+        "width": "={{ $('Configuration').first().json.imageMaxDimension }}",
+        "height": "={{ $('Configuration').first().json.imageMaxDimension }}",
+        "resizeOption": "onlyIfLarger",
+        "options": {
+          "destinationKey": "data",
+          "format": "jpeg",
+          "quality": "={{ $('Configuration').first().json.imageJpegQuality }}"
+        }
+      }
+    },
+    {
+      "id": "3d92df9c-00a3-43b2-b7bc-b1995dd026ea",
+      "name": "Validate compressed image",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const cfg = $('Configuration').first().json;\nconst maxBytes = Number(cfg.imageMaxBytes || 1000000);\nconst items = $input.all();\n\nfor (let index = 0; index < items.length; index++) {\n  const buffer = await this.helpers.getBinaryDataBuffer(index, 'data');\n  if (!buffer.length) throw new Error('Image compression produced an empty file.');\n  if (buffer.length > maxBytes) {\n    const media = items[index].json.media || {};\n    throw new Error(\n      'Compressed image ' + ((media.index ?? index) + 1) +\n      ' is still ' + buffer.length + ' bytes; limit is ' + maxBytes +\n      '. Lower imageMaxDimension or imageJpegQuality in Configuration.'\n    );\n  }\n  items[index].json = {\n    ...items[index].json,\n    compressedImageBytes: buffer.length,\n    compressedImageMimeType: items[index].binary?.data?.mimeType || 'image/jpeg',\n  };\n}\n\nreturn items;"
       }
     }
   ],
@@ -732,7 +768,7 @@
       "main": [
         [
           {
-            "node": "Upload image blob",
+            "node": "Compress image below 1 MB",
             "type": "main",
             "index": 0
           }
@@ -872,6 +908,28 @@
         [
           {
             "node": "Select new public originals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compress image below 1 MB": {
+      "main": [
+        [
+          {
+            "node": "Validate compressed image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate compressed image": {
+      "main": [
+        [
+          {
+            "node": "Upload image blob",
             "type": "main",
             "index": 0
           }
