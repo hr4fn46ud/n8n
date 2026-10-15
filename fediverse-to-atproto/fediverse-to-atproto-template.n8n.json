@@ -415,7 +415,7 @@
         300
       ],
       "parameters": {
-        "mode": "runOnceForAllItems",
+        "mode": "runOnceForEachItem",
         "jsCode": "const meta = $('Prepare image items').item.json;\nif (!$json.blob) throw new Error('uploadBlob returned no blob for source status ' + meta.sourceId);\nreturn {\n  json: {\n    ...meta,\n    uploaded: { alt: meta.media.alt || '', image: $json.blob },\n  },\n};"
       }
     },
@@ -588,7 +588,7 @@
       "parameters": {
         "width": 1180,
         "height": 300,
-        "content": "## Behavior\n- First production run uses `skip_existing`: it records the current recent posts but publishes none. Change `bootstrapMode` to `publish_existing` before first activation if you deliberately want the backlog.\n- Only public, own, non-reply, non-boost statuses are accepted. HTML is converted to text.\n- Text is split at grapheme boundaries and numbered; each ATProto record stays within 300 graphemes. URL and hashtag facets use UTF-8 byte offsets.\n- Up to four images are downloaded, uploaded with `com.atproto.repo.uploadBlob`, and attached to the first thread post with alt text.\n- Thread replies carry both `root` and immediate `parent`. Deterministic TIDs plus `putRecord` make retries idempotent. Network nodes retry four times with a five-second delay and fail loudly afterward."
+        "content": "## Behavior\n- First production run uses `skip_existing`: it records the current recent posts but publishes none. Change `bootstrapMode` to `publish_existing` before first activation if you deliberately want the backlog.\n- Only public, own, non-reply, non-boost statuses are accepted. HTML is converted to text.\n- Text is split at grapheme boundaries and numbered; each ATProto record stays within 300 graphemes. URL and hashtag facets use UTF-8 byte offsets.\n- Up to four images (maximum 2,000,000 bytes each) are downloaded and uploaded individually with `com.atproto.repo.uploadBlob`, then aggregated and attached to the first thread post with alt text. `Capture uploaded blob` must run once for each item; `Build thread items` must run once for all items.\n- Thread replies carry both `root` and immediate `parent`. Deterministic TIDs plus `putRecord` make retries idempotent. Network nodes retry four times with a five-second delay and fail loudly afterward."
       }
     }
   ],
@@ -888,7 +888,7 @@
     "saveDataSuccessExecution": "none",
     "saveManualExecutions": true
   },
-  "versionId": "9d25423f-28c2-4dcf-91e8-68ae8accc24d",
+  "versionId": "b7f875e6-2fa3-4742-b555-acde61230f5c",
   "meta": {
     "templateCredsSetupCompleted": false
   },
