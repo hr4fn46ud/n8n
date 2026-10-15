@@ -13,7 +13,7 @@ It works with GoToSocial, Mastodon, and other servers that provide the relevant 
 - carries content warnings into the post text;
 - splits long posts into ATProto reply threads of no more than 300 grapheme clusters per post;
 - creates link and hashtag facets with UTF-8 byte offsets;
-- transfers up to four images, including alt text, by uploading every image as a separate ATProto blob before aggregating the results;
+- transfers up to four images, including alt text, after resizing and recompressing every image below a strict 1,000,000-byte ceiling;
 - resolves the target PDS dynamically from the ATProto handle and DID document;
 - prevents duplicate processing through persistent workflow state and deterministic ATProto record keys;
 - retries relevant HTTP requests four times with a five-second delay.
@@ -48,6 +48,7 @@ A native quote post may still be treated as an original authored status. Its tex
 - a local account on a Mastodon-compatible Fediverse server;
 - a source API user token with read permission;
 - an ATProto account and app password;
+- GraphicsMagick available to n8n for the built-in `Edit Image` node; the official n8n Docker image includes it, while non-Docker installations may need it installed separately;
 - the file `fediverse-to-atproto-template.n8n.json`.
 
 The workflow uses only built-in n8n nodes. It has been tested with self-hosted n8n 2.43.x.
@@ -132,11 +133,36 @@ bootstrapMode: 'skip_existing',
 fetchLimit: 40,
 maxProcessedIds: 2000,
 language: 'de',
+imageMaxBytes: 1000000,
+imageMaxDimension: 1200,
+imageJpegQuality: 68,
 ```
 
 Change `language` to the appropriate ISO language code if required.
 
+The image defaults deliberately favor predictable ATProto uploads over preserving the original file verbatim:
+
+- every image is auto-oriented, constrained to at most 1200 × 1200 pixels, and encoded as JPEG at quality 68;
+- the result is measured from the actual binary buffer before upload;
+- a result above `imageMaxBytes` stops with a clear error instead of being sent to the PDS;
+- JPEG conversion removes animation and transparency. Keep that tradeoff in mind for GIF and transparent PNG source files.
+
 Do not remove the placeholder validation. It prevents an unfinished template from being activated and then failing in less comprehensible ways several nodes later.
+
+### Updating an existing imported workflow
+
+The least error-prone update path is to import the new JSON as a separate workflow, copy the three real account values from the old `Configuration` node, and reassign the existing credentials to the three credential-bearing HTTP nodes. Test the new workflow before disabling the old one.
+
+If you update the existing canvas manually, add the two new nodes in this exact order:
+
+```text
+Download image
+→ Compress image below 1 MB
+→ Validate compressed image
+→ Upload image blob
+```
+
+Also add `imageMaxBytes`, `imageMaxDimension`, and `imageJpegQuality` to `Configuration`. Importing the new template is safer because the validation code and item-linking settings matter; merely inserting a resize node is how one earns another evening with `InvalidRequest`.
 
 ## 5. Create the Fediverse credential in n8n
 
@@ -270,18 +296,21 @@ This is expected. `bootstrapMode: 'skip_existing'` prevents accidental bulk back
 
 ### Images are missing
 
-Only attachments reported as type `image` are transferred. The workflow accepts no more than four images per source post, matching the legacy ATProto image embed limit. Each image may contain no more than 2,000,000 bytes and must use an `image/*` MIME type.
+Only attachments reported as type `image` are transferred. The workflow accepts no more than four images per source post. Before upload, each image passes through `Compress image below 1 MB` and `Validate compressed image`. The latter checks the actual output buffer against the configured 1,000,000-byte limit.
 
 For correct multi-image processing, verify these two Code-node modes:
 
 | Node | Required mode |
 |---|---|
+| `Validate compressed image` | `Run Once for All Items` |
 | `Capture uploaded blob` | `Run Once for Each Item` |
 | `Build thread items` | `Run Once for All Items` |
 
-The first node preserves one uploaded blob for every input image. The second node sorts and aggregates those blobs into the single `app.bsky.embed.images` object attached to the first ATProto thread post. Using `Run Once for All Items` in both nodes can make n8n lose item correspondence or fail to resolve `$('Prepare image items').item` when multiple images are present.
+The validation node checks every compressed binary while keeping the image batch intact. `Capture uploaded blob` then preserves one uploaded blob for every input image, and `Build thread items` sorts and aggregates those blobs into the single `app.bsky.embed.images` object attached to the first ATProto thread post.
 
-If `Upload image blob` fails with an HTTP 400 or 413 response, inspect the MIME type and byte size of each individual image. The workflow does not resize or recompress oversized source images.
+If `Compress image below 1 MB` reports `Stream yields empty buffer`, verify that GraphicsMagick is installed and can decode the source format. If `Validate compressed image` reports that an image is still too large, lower `imageMaxDimension` to `1000` or `imageJpegQuality` to `60` in `Configuration`.
+
+If `Upload image blob` still fails with HTTP 400 or 413, inspect `compressedImageBytes` and `compressedImageMimeType` in the output of `Validate compressed image`. The request must contain no more than 1,000,000 bytes and use `image/jpeg`.
 
 ## Security notes
 
@@ -297,6 +326,8 @@ The template JSON contains placeholder credential references only. It contains n
 ## Relevant documentation
 
 - [n8n HTTP Request credentials](https://docs.n8n.io/integrations/builtin/credentials/httprequest/)
+- [n8n Edit Image node](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.editimage/)
+- [n8n binary buffer access](https://docs.n8n.io/build/code-in-n8n/cookbook/code-node/get-the-binary-data-buffer/)
 - [Mastodon account API](https://docs.joinmastodon.org/methods/accounts/)
 - [Mastodon OAuth](https://docs.joinmastodon.org/spec/oauth/)
 - [GoToSocial settings and managed applications](https://docs.gotosocial.org/en/latest/user_guide/settings/)
