@@ -13,7 +13,7 @@ It works with GoToSocial, Mastodon, and other servers that provide the relevant 
 - carries content warnings into the post text;
 - splits long posts into ATProto reply threads of no more than 300 grapheme clusters per post;
 - creates link and hashtag facets with UTF-8 byte offsets;
-- transfers up to four images, including alt text;
+- transfers up to four images, including alt text, by uploading every image as a separate ATProto blob before aggregating the results;
 - resolves the target PDS dynamically from the ATProto handle and DID document;
 - prevents duplicate processing through persistent workflow state and deterministic ATProto record keys;
 - retries relevant HTTP requests four times with a five-second delay.
@@ -232,6 +232,7 @@ Recommended follow-up tests:
 - a post containing a URL;
 - a post containing hashtags;
 - a post with an image and alt text;
+- a post containing two to four images with distinct alt texts;
 - a post longer than 300 grapheme clusters.
 
 ## Troubleshooting
@@ -269,7 +270,18 @@ This is expected. `bootstrapMode: 'skip_existing'` prevents accidental bulk back
 
 ### Images are missing
 
-Only attachments reported as type `image` are transferred. The workflow accepts no more than four images per source post, matching the ATProto image embed limit.
+Only attachments reported as type `image` are transferred. The workflow accepts no more than four images per source post, matching the legacy ATProto image embed limit. Each image may contain no more than 2,000,000 bytes and must use an `image/*` MIME type.
+
+For correct multi-image processing, verify these two Code-node modes:
+
+| Node | Required mode |
+|---|---|
+| `Capture uploaded blob` | `Run Once for Each Item` |
+| `Build thread items` | `Run Once for All Items` |
+
+The first node preserves one uploaded blob for every input image. The second node sorts and aggregates those blobs into the single `app.bsky.embed.images` object attached to the first ATProto thread post. Using `Run Once for All Items` in both nodes can make n8n lose item correspondence or fail to resolve `$('Prepare image items').item` when multiple images are present.
+
+If `Upload image blob` fails with an HTTP 400 or 413 response, inspect the MIME type and byte size of each individual image. The workflow does not resize or recompress oversized source images.
 
 ## Security notes
 
