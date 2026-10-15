@@ -33,7 +33,9 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "jsCode": "const state = $getWorkflowStaticData('global');\nstate.processed ??= {};\nstate.initialized ??= false;\n\nconst fediBaseUrl = 'https://YOUR_FEDI_HOST';\nconst fediAccount = 'YOUR_USERNAME@YOUR_FEDI_HOST';\nconst atprotoHandle = 'YOUR_ATPROTO_HANDLE';\n\nif ([fediBaseUrl, fediAccount, atprotoHandle].some(value => value.includes('YOUR_'))) {\n  throw new Error('Replace all YOUR_* placeholders in the Configuration node before activating the workflow.');\n}\n\nreturn [{\n  json: {\n    fediBaseUrl: fediBaseUrl.replace(/\\/$/, ''),\n    fediAccount,\n    fediUsername: fediAccount.split('@')[0],\n    atprotoHandle,\n    bootstrapMode: 'skip_existing',\n    fetchLimit: 40,\n    maxProcessedIds: 2000,\n    language: 'de',\n    imageMaxBytes: 1000000,\n    imageMaxDimension: 1200,\n    imageJpegQuality: 68,\n  },\n}];"
-      }
+      },
+      "notesInFlow": true,
+      "notes": "Public account values and operational defaults only. Never store access tokens or passwords here."
     },
     {
       "id": "2263d1b3-3695-41d3-8706-e5a68d70f5bb",
@@ -74,7 +76,9 @@
       },
       "retryOnFail": true,
       "maxTries": 4,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "notesInFlow": true,
+      "notes": "Bearer Auth\nCredential: Fediverse read token\nToken: raw read-only source token; do not add the word Bearer."
     },
     {
       "id": "30d61105-3144-497b-891f-10167cb32056",
@@ -123,7 +127,9 @@
       },
       "retryOnFail": true,
       "maxTries": 4,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "notesInFlow": true,
+      "notes": "Bearer Auth\nUse the same Fediverse read token credential as the account lookup node."
     },
     {
       "id": "78ad7c94-5d90-4cc3-ab82-b85213dc8a4d",
@@ -259,7 +265,9 @@
       },
       "retryOnFail": true,
       "maxTries": 4,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "notesInFlow": true,
+      "notes": "Custom Auth · ATProto login body\nJSON field:\n{\n  \"body\": {\n    \"identifier\": \"YOUR_ATPROTO_HANDLE\",\n    \"password\": \"YOUR_APP_PASSWORD\"\n  }\n}"
     },
     {
       "id": "5af904f2-d7df-44f9-a619-286ae49dc29a",
@@ -289,6 +297,20 @@
         "options": {
           "reset": false
         }
+      }
+    },
+    {
+      "id": "98091591-87e2-4804-aa71-a9fdcb513cb2",
+      "name": "Run summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        80
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json);\nreturn [{\n  json: {\n    ok: true,\n    processedCount: rows.length,\n    processed: rows,\n    finishedAt: new Date().toISOString(),\n  },\n}];"
       }
     },
     {
@@ -365,6 +387,42 @@
       "waitBetweenTries": 5000
     },
     {
+      "id": "a896e8ca-a129-4b34-a4a1-a966cb29993a",
+      "name": "Compress image below 1 MB",
+      "type": "n8n-nodes-base.editImage",
+      "typeVersion": 1.1,
+      "position": [
+        2260,
+        300
+      ],
+      "parameters": {
+        "operation": "resize",
+        "dataPropertyName": "data",
+        "width": "={{ $('Configuration').first().json.imageMaxDimension }}",
+        "height": "={{ $('Configuration').first().json.imageMaxDimension }}",
+        "resizeOption": "onlyIfLarger",
+        "options": {
+          "destinationKey": "data",
+          "format": "jpeg",
+          "quality": "={{ $('Configuration').first().json.imageJpegQuality }}"
+        }
+      }
+    },
+    {
+      "id": "3d92df9c-00a3-43b2-b7bc-b1995dd026ea",
+      "name": "Validate compressed image",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const cfg = $('Configuration').first().json;\nconst maxBytes = Number(cfg.imageMaxBytes || 1000000);\nconst items = $input.all();\n\nfor (let index = 0; index < items.length; index++) {\n  const buffer = await this.helpers.getBinaryDataBuffer(index, 'data');\n  if (!buffer.length) throw new Error('Image compression produced an empty file.');\n  if (buffer.length > maxBytes) {\n    const media = items[index].json.media || {};\n    throw new Error(\n      'Compressed image ' + ((media.index ?? index) + 1) +\n      ' is still ' + buffer.length + ' bytes; limit is ' + maxBytes +\n      '. Lower imageMaxDimension or imageJpegQuality in Configuration.'\n    );\n  }\n  items[index].json = {\n    ...items[index].json,\n    compressedImageBytes: buffer.length,\n    compressedImageMimeType: items[index].binary?.data?.mimeType || 'image/jpeg',\n  };\n}\n\nreturn items;"
+      }
+    },
+    {
       "id": "4f8e39db-1250-4ac4-b7a0-02d1f47113a3",
       "name": "Upload image blob",
       "type": "n8n-nodes-base.httpRequest",
@@ -403,7 +461,9 @@
       },
       "retryOnFail": true,
       "maxTries": 4,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "notesInFlow": true,
+      "notes": "No stored credential is assigned here. This node uses the short-lived accessJwt created during the current run."
     },
     {
       "id": "888c91e4-9c04-44bb-a712-1da3fb0ade06",
@@ -464,6 +524,20 @@
       }
     },
     {
+      "id": "d9494c09-a1f8-4657-bffe-e9cac7bca2e1",
+      "name": "Mark source post complete",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3700,
+        220
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const rows = $input.all().map(i => i.json);\nif (!rows.length) throw new Error('Thread loop completed without records.');\nconst first = rows[0];\nconst state = $getWorkflowStaticData('global');\nstate.processed ??= {};\nstate.processed[first.sourceId] = new Date().toISOString();\ndelete state.threadState?.[first.sourceId];\n\nconst entries = Object.entries(state.processed).sort((a, b) => String(b[1]).localeCompare(String(a[1])));\nconst keep = $('Configuration').first().json.maxProcessedIds;\nstate.processed = Object.fromEntries(entries.slice(0, keep));\n\nreturn [{\n  json: {\n    sourceId: first.sourceId,\n    sourceUrl: first.sourceUrl,\n    threadParts: rows.length,\n    rootUri: rows[0].createdRef.uri,\n    imagesUploaded: first.uploadedImages?.length || 0,\n    imagesDroppedBecauseAtProtoLimitIsFour: first.droppedImageCount || 0,\n  },\n}];"
+      }
+    },
+    {
       "id": "a625dafe-e22b-4e60-8611-25f7ce0201f3",
       "name": "Build ATProto post record",
       "type": "n8n-nodes-base.code",
@@ -517,7 +591,9 @@
       },
       "retryOnFail": true,
       "maxTries": 4,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "notesInFlow": true,
+      "notes": "No stored credential is assigned here. This node uses the short-lived accessJwt created during the current run."
     },
     {
       "id": "b03e010c-443c-4fd1-899f-3a3f89d95530",
@@ -534,97 +610,78 @@
       }
     },
     {
-      "id": "d9494c09-a1f8-4657-bffe-e9cac7bca2e1",
-      "name": "Mark source post complete",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        3700,
-        220
-      ],
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const rows = $input.all().map(i => i.json);\nif (!rows.length) throw new Error('Thread loop completed without records.');\nconst first = rows[0];\nconst state = $getWorkflowStaticData('global');\nstate.processed ??= {};\nstate.processed[first.sourceId] = new Date().toISOString();\ndelete state.threadState?.[first.sourceId];\n\nconst entries = Object.entries(state.processed).sort((a, b) => String(b[1]).localeCompare(String(a[1])));\nconst keep = $('Configuration').first().json.maxProcessedIds;\nstate.processed = Object.fromEntries(entries.slice(0, keep));\n\nreturn [{\n  json: {\n    sourceId: first.sourceId,\n    sourceUrl: first.sourceUrl,\n    threadParts: rows.length,\n    rootUri: rows[0].createdRef.uri,\n    imagesUploaded: first.uploadedImages?.length || 0,\n    imagesDroppedBecauseAtProtoLimitIsFour: first.droppedImageCount || 0,\n  },\n}];"
-      }
-    },
-    {
-      "id": "98091591-87e2-4804-aa71-a9fdcb513cb2",
-      "name": "Run summary",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1540,
-        80
-      ],
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const rows = $input.all().map(i => i.json);\nreturn [{\n  json: {\n    ok: true,\n    processedCount: rows.length,\n    processed: rows,\n    finishedAt: new Date().toISOString(),\n  },\n}];"
-      }
-    },
-    {
       "id": "7b7fcb44-4ca0-43af-85af-7c6d4c8adef5",
-      "name": "Setup",
+      "name": "1 — Configuration",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
         -1320,
-        -180
+        -220
       ],
       "parameters": {
-        "width": 1000,
+        "width": 420,
         "height": 300,
-        "content": "## Setup before publishing\n1. In **Configuration**, replace all `YOUR_*` placeholders.\n2. Create a **Bearer Auth** credential named `Fediverse read token`; paste a user token with `read` permission from the Mastodon-compatible source server. Assign it to both Fediverse HTTP nodes.\n3. Create a **Custom Auth** credential named `ATProto login body` with JSON: `{\"body\":{\"identifier\":\"YOUR_ATPROTO_HANDLE\",\"password\":\"YOUR_APP_PASSWORD\"}}`. Assign it to **Create ATProto session**.\n4. Save and publish/activate the workflow. Let the first scheduled production run establish the duplicate-protection baseline before publishing a new source post.\n\nNo secret is stored in this workflow JSON. The public ATProto identity and DID resolver endpoints are protocol infrastructure, not account-specific configuration."
+        "content": "## 1 · Account configuration\nOpen **Configuration** and replace only:\n\n- `YOUR_FEDI_HOST`\n- `YOUR_USERNAME@YOUR_FEDI_HOST`\n- `YOUR_ATPROTO_HANDLE`\n\nOperational defaults and image limits are kept separately below those account values. **Do not put tokens or passwords in this node.**"
+      }
+    },
+    {
+      "id": "4eb374f8-01b4-4616-a59e-0308e2da0a36",
+      "name": "2 — Fediverse credential",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -860,
+        -220
+      ],
+      "parameters": {
+        "width": 560,
+        "height": 300,
+        "content": "## 2 · Fediverse authentication\n**Credential type:** Bearer Auth  \n**Suggested name:** `Fediverse read token`\n\n**Token field**\n`YOUR_READ_ONLY_ACCESS_TOKEN`\n\nPaste the raw token without the word `Bearer`. Assign the same credential to:\n\n- **Look up Fediverse account**\n- **Fetch recent Fediverse posts**\n\nThe source credential requires read access only."
+      }
+    },
+    {
+      "id": "7e50a1fc-7344-4964-85b4-4983d02ecf07",
+      "name": "3 — ATProto credential",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -260,
+        -300
+      ],
+      "parameters": {
+        "width": 1460,
+        "height": 380,
+        "content": "## 3 · ATProto authentication\n**Credential type:** Custom Auth  \n**Suggested name:** `ATProto login body`  \n**Assign only to:** **Create ATProto session**\n\nPaste this into the credential's **JSON** field:\n\n```json\n{\n  \"body\": {\n    \"identifier\": \"YOUR_ATPROTO_HANDLE\",\n    \"password\": \"YOUR_APP_PASSWORD\"\n  }\n}\n```\n\nUse an app password, not the normal account password. Keep **Allowed HTTP Request Domains** set to **All**, because the PDS is resolved dynamically from the handle and DID document."
       }
     },
     {
       "id": "f735a5d1-b4a8-4a45-8f1f-7817a240962d",
-      "name": "Behavior and limits",
+      "name": "4 — Image handling",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
         1540,
-        -180
+        -220
       ],
       "parameters": {
-        "width": 1180,
+        "width": 1440,
         "height": 300,
-        "content": "## Behavior\n- First production run uses `skip_existing`: it records the current recent posts but publishes none. Change `bootstrapMode` to `publish_existing` before first activation if you deliberately want the backlog.\n- Only public, own, non-reply, non-boost statuses are accepted. HTML is converted to text.\n- Text is split at grapheme boundaries and numbered; each ATProto record stays within 300 graphemes. URL and hashtag facets use UTF-8 byte offsets.\n- Up to four images are resized to at most 1200 × 1200 pixels, converted to JPEG at quality 68, and checked against a 1,000,000-byte limit before individual `uploadBlob` calls. Alt text is retained. Animated images and transparency are flattened by JPEG conversion.\n- `Capture uploaded blob` must run once for each item; `Build thread items` and `Validate compressed image` must run once for all items.\n- Thread replies carry both `root` and immediate `parent`. Deterministic TIDs plus `putRecord` make retries idempotent. Network nodes retry four times with a five-second delay and fail loudly afterward."
+        "content": "## 4 · Image handling\n**Path:** Prepare → Download → Compress → Validate → uploadBlob → Aggregate\n\n- At most **four** source images are accepted.\n- Each image is auto-oriented, limited to **1200 × 1200 px**, encoded as **JPEG quality 68**, and checked against **1,000,000 bytes**.\n- Alt text and source order are retained.\n- JPEG conversion removes animation and transparency.\n- The size check runs for the complete image batch; blob capture runs once per image; aggregation runs once for all images."
       }
     },
     {
-      "id": "a896e8ca-a129-4b34-a4a1-a966cb29993a",
-      "name": "Compress image below 1 MB",
-      "type": "n8n-nodes-base.editImage",
-      "typeVersion": 1.1,
+      "id": "be0b7610-e7d3-4f5b-8f84-d540d1b0ff18",
+      "name": "5 — Publication and first run",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
       "position": [
-        2260,
-        300
+        3220,
+        -220
       ],
       "parameters": {
-        "operation": "resize",
-        "dataPropertyName": "data",
-        "width": "={{ $('Configuration').first().json.imageMaxDimension }}",
-        "height": "={{ $('Configuration').first().json.imageMaxDimension }}",
-        "resizeOption": "onlyIfLarger",
-        "options": {
-          "destinationKey": "data",
-          "format": "jpeg",
-          "quality": "={{ $('Configuration').first().json.imageJpegQuality }}"
-        }
-      }
-    },
-    {
-      "id": "3d92df9c-00a3-43b2-b7bc-b1995dd026ea",
-      "name": "Validate compressed image",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2500,
-        300
-      ],
-      "parameters": {
-        "mode": "runOnceForAllItems",
-        "jsCode": "const cfg = $('Configuration').first().json;\nconst maxBytes = Number(cfg.imageMaxBytes || 1000000);\nconst items = $input.all();\n\nfor (let index = 0; index < items.length; index++) {\n  const buffer = await this.helpers.getBinaryDataBuffer(index, 'data');\n  if (!buffer.length) throw new Error('Image compression produced an empty file.');\n  if (buffer.length > maxBytes) {\n    const media = items[index].json.media || {};\n    throw new Error(\n      'Compressed image ' + ((media.index ?? index) + 1) +\n      ' is still ' + buffer.length + ' bytes; limit is ' + maxBytes +\n      '. Lower imageMaxDimension or imageJpegQuality in Configuration.'\n    );\n  }\n  items[index].json = {\n    ...items[index].json,\n    compressedImageBytes: buffer.length,\n    compressedImageMimeType: items[index].binary?.data?.mimeType || 'image/jpeg',\n  };\n}\n\nreturn items;"
+        "width": 1200,
+        "height": 300,
+        "content": "## 5 · Thread publication and first run\n- Text is split at grapheme boundaries; every record remains within **300 graphemes**.\n- URL and hashtag facets use UTF-8 byte offsets.\n- Thread replies contain both `root` and immediate `parent` references.\n- Deterministic record keys make retries idempotent.\n- With `bootstrapMode: 'skip_existing'`, the first scheduled production run records the current source posts but publishes none.\n\nAfter that baseline run, publish a new public, original, non-reply source post and wait for the next schedule."
       }
     }
   ],
