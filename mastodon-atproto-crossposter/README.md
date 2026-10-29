@@ -70,7 +70,7 @@ Manual runs do not reliably persist static data. Establish the baseline with a s
 
 ## Recovery and limitations
 
-Completed source IDs are stored in workflow static data. Deterministic keys `masto-SOURCE_ID-PART_INDEX` mean repeated putRecord requests write the same record. After a partial failure, a later run reconstructs the thread under the same keys. Do not change source text or splitting logic during recovery. Later edits and deletions are not synchronized. Concurrent workflow copies are unsupported.
+Completed source IDs are stored in workflow static data. Deterministic 13-character TID record keys are derived from the source timestamp, source ID, and thread part index. Repeated putRecord requests write the same record. After a partial failure, a later run reconstructs the thread under the same keys. Do not change source text or splitting logic during recovery. Later edits and deletions are not synchronized. Concurrent workflow copies are unsupported.
 
 Each poll fetches at most 40 recent statuses without full backward pagination. Extended downtime or more than 40 new statuses between successful polls can cause missed posts. A fresh import has its own state and establishes a new baseline.
 
