@@ -1,25 +1,24 @@
-# Mastodon → ATProto Crossposter für n8n
+# Mastodon → ATProto Crossposter for n8n
 
-Importierbarer Workflow für öffentliche Mastodon-Originalbeiträge und ein frei konfigurierbares ATProto-Konto. Enthält keine Zugangsdaten oder vorkonfigurierten persönlichen Accounts. Der Workflow ist beim Import deaktiviert.
+An importable workflow for copying public original Mastodon posts to a configurable ATProto account. Contains no personal account settings or secrets. Inactive on import.
 
-## Funktionen
+## Features
 
-- Mastodon-Polling alle zwei Minuten; ausschließlich öffentliche Originalbeiträge, keine Antworten oder Boosts.
-- HTML-zu-Text-Konvertierung mit Links und Inhaltswarnungen.
-- Threads mit maximal 300 Graphemen je Teil, einschließlich Nummerierung; ATProto-Verknüpfung über root und parent.
-- Link- und Hashtag-Facets mit UTF-8-Bytepositionen.
-- Bis zu vier Bilder mit Alt-Text; JPEG-Komprimierung und Prüfung auf unter 1 MB pro Bild.
-- Dynamische Handle-, DID- und PDS-Auflösung einschließlich Rückprüfung des Handles im DID-Dokument.
-- Persistenter Verarbeitungszustand und deterministische Record-Schlüssel für wiederholbare Veröffentlichungen.
-- HTTP-Zeitlimits und begrenzte Wiederholungsversuche.
+- Polls every two minutes; public originals only, excluding replies and boosts.
+- Converts HTML to text, preserving links and including content warnings.
+- Splits threads at grapheme boundaries, with at most 300 graphemes per part including numbering, using root and parent references.
+- Creates link and hashtag facets with UTF-8 byte offsets.
+- Transfers up to four images with alt text, compressing to JPEG and checking each image is below 1 MB.
+- Resolves handle, DID, and PDS dynamically and verifies the handle in the DID document.
+- Uses persistent processing state, deterministic record keys, HTTP timeouts, and bounded retries.
 
-## Voraussetzungen
+## Requirements
 
-Eine selbst gehostete n8n-Installation mit integrierten HTTP Request-, Code- und Edit Image-Nodes sowie GraphicsMagick. Die ursprüngliche Vorlage wurde mit n8n 2.43.x praktisch erprobt. Diese neutrale Ausgabe wurde auf JSON-Struktur, Code-Syntax und Verbindungen geprüft; ein erneuter Live-Import wurde nicht durchgeführt.
+Self-hosted n8n with built-in HTTP Request, Code, and Edit Image nodes, plus GraphicsMagick. The original template was previously tested with n8n 2.43.x. This generic edition has been checked for JSON structure, code syntax, and connections; a separate live import has not been tested.
 
-## 1. Importieren und konfigurieren
+## 1. Import and configure
 
-`mastodon-to-atproto.n8n.json` über **Import from File** importieren. Im Node **Configuration** diese drei Werte ersetzen:
+Import `mastodon-to-atproto.n8n.json` using **Import from File**. In **Configuration**, replace:
 
 ```javascript
 const fediBaseUrl = 'https://YOUR_MASTODON_HOST';
@@ -27,22 +26,24 @@ const fediAccount = 'YOUR_USERNAME@YOUR_MASTODON_HOST';
 const atprotoHandle = 'YOUR_ATPROTO_HANDLE';
 ```
 
-Die Basis-URL enthält `https://`, der Account und das ATProto-Handle kein führendes `@`. Beispielwerte wären `https://social.example`, `alice@social.example` und `alice.example`. Keine Passwörter in diesem Node hinterlegen. Die vorhandene Platzhalterprüfung verhindert versehentliches Starten ohne Konfiguration.
+Include HTTPS in the base URL, and omit a leading @ from the account and handle. Example: `https://social.example`, `alice@social.example`, `alice.example`. Never store secrets here. Placeholder validation prevents unconfigured runs.
 
-## 2. Mastodon-Credential
+The default post language is `de`; change `language` to your content language, such as `en`. This is post metadata, not the interface language. The scheduling timezone defaults to `Europe/Berlin` and can be changed in workflow settings.
 
-In der Mastodon-Weboberfläche unter **Einstellungen → Entwicklung → Neue Anwendung** eine Anwendung erstellen. Als Rechte ausschließlich `read:accounts` und `read:statuses` wählen, andere voreingestellte Rechte entfernen. Die voreingestellte Redirect-URI beibehalten. Speichern und den Benutzer-Zugriffstoken kopieren.
+## 2. Mastodon credential
 
-In n8n ein **Bearer Auth** Credential erstellen, beispielsweise `Mastodon read token`. Nur den Token ohne vorangestelltes `Bearer` einfügen. Falls verfügbar, erlaubte Domains auf die eigene Mastodon-Domain beschränken. Dasselbe Credential beiden Nodes zuweisen:
+Under **Preferences → Development → New application**, create an application with only `read:accounts` and `read:statuses`. Remove other default permissions and keep the default redirect URI. Save and copy the user access token.
+
+Create an n8n **Bearer Auth** credential. Paste the token without the word Bearer. If supported, restrict allowed domains to your Mastodon host. Assign the same credential to:
 
 - **Look up Fediverse account**
 - **Fetch recent Fediverse posts**
 
-Client-ID und Client-Secret werden bei dieser Einrichtung nicht benötigt. Auf Mastodon erfolgen ausschließlich Lesezugriffe.
+Client ID and client secret are not required. Mastodon requests are read-only.
 
-## 3. ATProto-Credential
+## 3. ATProto credential
 
-Beim ATProto-Anbieter ein eigenes App-Passwort für den Crossposter erstellen. Im Node **Create ATProto session** ein **Custom Auth** Credential anlegen und folgendes JSON in dessen JSON-Feld eintragen:
+Create a dedicated app password with your ATProto provider. In **Create ATProto session**, create a **Custom Auth** credential and enter this in its JSON field:
 
 ```json
 {
@@ -53,39 +54,39 @@ Beim ATProto-Anbieter ein eigenes App-Passwort für den Crossposter erstellen. I
 }
 ```
 
-Beide Platzhalter ersetzen. Das Handle muss mit **Configuration** übereinstimmen. Bindestriche im App-Passwort beibehalten. Das Credential diesem Node zuweisen. Nachfolgende Nodes verwenden automatisch den temporären Session-Token.
+Replace both placeholders. The handle must match Configuration. Preserve password hyphens. Assign the credential to this node; subsequent nodes automatically use its temporary session token.
 
-Das tatsächliche Schreibziel ist der aus dem DID-Dokument ermittelte PDS, nicht zwangsläufig die Handle-Domain. Für eine Domain-Beschränkung des Credentials zuerst den PDS prüfen: **Resolve ATProto handle → Build DID document URL → Fetch DID document → Extract PDS endpoint**. Den ausgegebenen PDS-Host im Credential erlauben; bei einem PDS-Umzug erneut prüfen und anpassen. Niemals das App-Passwort an einen ungeprüften Host senden.
+The destination is the PDS resolved from the DID document, which may differ from the handle domain. Inspect **Resolve ATProto handle → Build DID document URL → Fetch DID document → Extract PDS endpoint** to verify the PDS. Restrict the credential to that verified PDS host if supported. Recheck after a PDS migration. Never send the password to an unverified host.
 
-## 4. Aktivieren und testen
+## 4. Activate and test
 
-1. Einen gegebenenfalls vorhandenen Crossposter für dieselbe Quelle deaktivieren.
-2. Workflow speichern und veröffentlichen/aktivieren.
-3. Ersten geplanten Produktionslauf abwarten. `bootstrapMode: 'skip_existing'` merkt die aktuell abgerufenen Beiträge als Ausgangsbestand und veröffentlicht sie nicht.
-4. Danach einen neuen öffentlichen Originalbeitrag veröffentlichen. Nach spätestens dem nächsten erfolgreichen Polling-Lauf das Ziel prüfen.
-5. Einen langen Beitrag und bis zu vier Bilder mit unterschiedlichen Alt-Texten testen. Replies, Boosts und nicht öffentliche Beiträge dürfen nicht erscheinen.
+1. Disable any previous crossposter for this source.
+2. Save and publish or activate the workflow.
+3. Wait for the first scheduled production run. With `bootstrapMode: 'skip_existing'`, fetched existing posts become the baseline and are not published.
+4. Publish a new public original post and check the target after the next successful poll.
+5. Test a long post and four images with distinct alt texts. Replies, boosts, and non-public posts must not appear.
 
-Manuelle Testläufe speichern statische Workflow-Daten nicht zuverlässig. Den Ausgangsbestand daher durch einen geplanten Produktionslauf etablieren. Ausführungen seriell betreiben und überlappende Läufe verhindern.
+Manual runs do not reliably persist static data. Establish the baseline with a scheduled production run. Prevent overlapping executions and run only one crossposter for the same source and target.
 
-## Wiederaufnahme und Grenzen
+## Recovery and limitations
 
-Fertige Quellen werden in statischen Workflow-Daten gespeichert. Zielbeiträge erhalten deterministische Record-Schlüssel `masto-QUELL_ID-TEILINDEX`. Ein erneuter putRecord-Aufruf schreibt denselben Datensatz. Nach einem Teilfehler rekonstruiert ein späterer Lauf den Thread unter denselben Schlüsseln. Währenddessen weder Quelltext noch Aufteilungslogik ändern. Es gibt keine Synchronisierung nachträglicher Bearbeitungen oder Löschungen und keine Garantie bei gleichzeitig laufenden Workflow-Kopien.
+Completed source IDs are stored in workflow static data. Deterministic keys `masto-SOURCE_ID-PART_INDEX` mean repeated putRecord requests write the same record. After a partial failure, a later run reconstructs the thread under the same keys. Do not change source text or splitting logic during recovery. Later edits and deletions are not synchronized. Concurrent workflow copies are unsupported.
 
-Pro Abruf werden höchstens 40 aktuelle Status geladen, ohne vollständige Rückwärtspaginierung. Nach längerer Abschaltung oder bei mehr als 40 neuen Status können Beiträge fehlen. Ein Neuimport erhält einen eigenen Verarbeitungszustand und etabliert einen neuen Ausgangsbestand.
+Each poll fetches at most 40 recent statuses without full backward pagination. Extended downtime or more than 40 new statuses between successful polls can cause missed posts. A fresh import has its own state and establishes a new baseline.
 
-Nach ausgeschöpften HTTP-Wiederholungen stoppt die Ausführung. Beim nächsten geplanten Lauf werden noch nicht abgeschlossene Beiträge erneut versucht. Keine automatische Retry-After-Auswertung, keine separate Fehlerbenachrichtigung. Fehler unter **Executions** prüfen; bei Bedarf einen n8n-Fehlerworkflow zuweisen.
+Exhausted HTTP retries stop execution. The next scheduled run attempts unfinished posts again. Automatic Retry-After handling and dedicated error notifications are not included. Inspect **Executions** and optionally configure an n8n error workflow.
 
-JPEG-Konvertierung entfernt Animation und Transparenz. Zu große komprimierte Bilder führen zu einem Fehler; dann in **Configuration** `imageMaxDimension` oder `imageJpegQuality` verringern. Videos, Audio, Umfragen und native Quote-Beziehungen werden nicht übertragen. HTML-Konvertierung ist auf typische Mastodon-Beitragsinhalte ausgelegt.
+JPEG conversion removes animation and transparency. Images still exceeding the limit cause an error; reduce `imageMaxDimension` or `imageJpegQuality` in Configuration. Video, audio, polls, and native quote relationships are not transferred. HTML conversion targets typical Mastodon post markup.
 
-## Weitergabe und Zugangsdaten
+## Sharing and secrets
 
-Diese JSON und README können als neutrale Vorlage weitergegeben werden. Zugangsdaten ausschließlich im n8n-Credential-Speicher hinterlegen. Nach eigener Nutzung exportierte Dateien vor Weitergabe erneut auf persönliche Werte, angeheftete Testdaten und Credential-Verweise prüfen.
+The supplied JSON and README are generic templates suitable for sharing. Each recipient creates their own credentials. Before sharing a configured export, inspect it for personal values, pinned data, and credential references.
 
-Erfolgreiche und manuelle Ausführungen werden standardmäßig nicht gespeichert. Fehlerausführungen können temporäre Session-Tokens enthalten: Zugriff und Aufbewahrungsdauer entsprechend begrenzen. Die JSON enthält nur Credential-Platzhalter; jeder Empfänger legt eigene Credentials an.
+Successful and manual executions are not saved by default. Failed execution data may contain temporary session tokens; restrict access and retention.
 
-## Dokumentation
+## Documentation
 
 - [Mastodon Accounts API](https://docs.joinmastodon.org/methods/accounts/)
-- [ATProto-Beiträge und Threads](https://docs.bsky.app/docs/tutorials/creating-a-post)
-- [n8n HTTP Request Credentials](https://docs.n8n.io/integrations/builtin/credentials/httprequest/)
+- [ATProto posts and threads](https://docs.bsky.app/docs/tutorials/creating-a-post)
+- [n8n HTTP Request credentials](https://docs.n8n.io/integrations/builtin/credentials/httprequest/)
 - [n8n Edit Image](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.editimage/)
